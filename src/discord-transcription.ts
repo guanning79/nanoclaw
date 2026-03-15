@@ -17,8 +17,17 @@ import { logger } from './logger.js';
 
 const execFileAsync = promisify(execFile);
 
-function getConfig(): { python: string; model: string; language: string; scriptPath: string } {
-  const envVars = readEnvFile(['WHISPER_PYTHON', 'WHISPER_MODEL', 'WHISPER_LANGUAGE']);
+function getConfig(): {
+  python: string;
+  model: string;
+  language: string;
+  scriptPath: string;
+} {
+  const envVars = readEnvFile([
+    'WHISPER_PYTHON',
+    'WHISPER_MODEL',
+    'WHISPER_LANGUAGE',
+  ]);
   const python =
     process.env.WHISPER_PYTHON ||
     envVars.WHISPER_PYTHON ||
@@ -43,7 +52,10 @@ function getConfig(): { python: string; model: string; language: string; scriptP
 async function downloadToTemp(url: string, ext: string): Promise<string> {
   const dir = join(tmpdir(), 'nanoclaw-discord');
   await mkdir(dir, { recursive: true });
-  const tmpPath = join(dir, `voice_${Date.now()}_${Math.random().toString(36).slice(2)}${ext}`);
+  const tmpPath = join(
+    dir,
+    `voice_${Date.now()}_${Math.random().toString(36).slice(2)}${ext}`,
+  );
 
   const response = await fetch(url);
   if (!response.ok || !response.body) {
@@ -51,7 +63,10 @@ async function downloadToTemp(url: string, ext: string): Promise<string> {
   }
 
   const dest = createWriteStream(tmpPath);
-  await pipeline(Readable.fromWeb(response.body as import('stream/web').ReadableStream), dest);
+  await pipeline(
+    Readable.fromWeb(response.body as import('stream/web').ReadableStream),
+    dest,
+  );
   return tmpPath;
 }
 
