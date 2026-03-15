@@ -41,13 +41,16 @@ export interface ContainerInput {
   isMain: boolean;
   isScheduledTask?: boolean;
   assistantName?: string;
+  maxHistoryTurns?: number;
 }
 
 export interface ContainerOutput {
-  status: 'success' | 'error';
+  status: 'success' | 'error' | 'tool_use' | 'interrupted';
   result: string | null;
   newSessionId?: string;
   error?: string;
+  toolName?: string;
+  toolSummary?: string;
 }
 
 interface VolumeMount {
@@ -190,8 +193,11 @@ function buildVolumeMounts(
     group.folder,
     'agent-runner-src',
   );
-  if (!fs.existsSync(groupAgentRunnerDir) && fs.existsSync(agentRunnerSrc)) {
-    fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
+  if (fs.existsSync(agentRunnerSrc)) {
+    fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, {
+      recursive: true,
+      force: true,
+    });
   }
   mounts.push({
     hostPath: groupAgentRunnerDir,

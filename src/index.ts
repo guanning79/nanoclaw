@@ -5,6 +5,7 @@ import {
   ASSISTANT_NAME,
   CREDENTIAL_PROXY_PORT,
   IDLE_TIMEOUT,
+  MAX_HISTORY_TURNS,
   POLL_INTERVAL,
   TIMEZONE,
   TRIGGER_PATTERN,
@@ -208,13 +209,51 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }, IDLE_TIMEOUT);
   };
 
+  await channel.sendMessage(chatJid, '收到，正在处理…').catch(() => {
+    /* ignore */
+  });
   await channel.setTyping?.(chatJid, true);
   let hadError = false;
   let outputSentToUser = false;
 
+  // Tool call batching: buffer tool calls for 5s then flush as one message
+  const toolCallBuffer: string[] = [];
+  let toolFlushTimer: ReturnType<typeof setTimeout> | null = null;
+  const flushToolCalls = async () => {
+    if (toolFlushTimer) {
+      clearTimeout(toolFlushTimer);
+      toolFlushTimer = null;
+    }
+    if (toolCallBuffer.length === 0) return;
+    const lines = toolCallBuffer
+      .map((s, i) => (i === 0 ? `🔧 ${s}` : `   ${s}`))
+      .join('\n');
+    toolCallBuffer.length = 0;
+    await channel.sendMessage(chatJid, lines).catch(() => {
+      /* ignore */
+    });
+  };
+
   const output = await runAgent(group, prompt, chatJid, async (result) => {
-    // Streaming output callback — called for each agent result
+    // Reset idle timer on any container output (not just final text results)
+    resetIdleTimer();
+
+    if (result.status === 'tool_use' && result.toolName) {
+      const entry = result.toolSummary
+        ? `${result.toolName}: ${result.toolSummary}`
+        : result.toolName;
+      toolCallBuffer.push(entry);
+      if (toolFlushTimer) clearTimeout(toolFlushTimer);
+      toolFlushTimer = setTimeout(flushToolCalls, 5000);
+    }
+
+    if (result.status === 'success') {
+      queue.notifyIdle(chatJid);
+    }
+
     if (result.result) {
+      // Flush any buffered tool calls before the final reply
+      await flushToolCalls();
       const raw =
         typeof result.result === 'string'
           ? result.result
@@ -226,12 +265,12 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         await channel.sendMessage(chatJid, text);
         outputSentToUser = true;
       }
-      // Only reset idle timer on actual results, not session-update markers (result: null)
-      resetIdleTimer();
     }
 
-    if (result.status === 'success') {
-      queue.notifyIdle(chatJid);
+    if (result.status === 'interrupted') {
+      await channel.sendMessage(chatJid, '任务已中断。').catch(() => {
+        /* ignore */
+      });
     }
 
     if (result.status === 'error') {
@@ -239,6 +278,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }
   });
 
+  await flushToolCalls();
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
 
@@ -320,6 +360,7 @@ async function runAgent(
         chatJid,
         isMain,
         assistantName: ASSISTANT_NAME,
+        maxHistoryTurns: MAX_HISTORY_TURNS,
       },
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),
@@ -420,7 +461,23 @@ async function startMessageLoop(): Promise<void> {
             allPending.length > 0 ? allPending : groupMessages;
           const formatted = formatMessages(messagesToSend, TIMEZONE);
 
-          if (queue.sendMessage(chatJid, formatted)) {
+          // Check for interrupt commands before piping to container
+          const INTERRUPT_PATTERN = /^(stop|cancel|停止|取消|打断|abort)$/i;
+          const combinedText = messagesToSend
+            .map((m) => m.content.trim())
+            .join(' ')
+            .trim();
+          if (INTERRUPT_PATTERN.test(combinedText) && queue.isActive(chatJid)) {
+            queue.closeStdin(chatJid);
+            channel
+              .sendMessage(chatJid, '任务已打断。')
+              .catch((err) =>
+                logger.warn({ chatJid, err }, 'Failed to send interrupt ack'),
+              );
+            lastAgentTimestamp[chatJid] =
+              messagesToSend[messagesToSend.length - 1].timestamp;
+            saveState();
+          } else if (queue.sendMessage(chatJid, formatted)) {
             logger.debug(
               { chatJid, count: messagesToSend.length },
               'Piped messages to active container',

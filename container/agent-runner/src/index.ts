@@ -27,13 +27,16 @@ interface ContainerInput {
   isMain: boolean;
   isScheduledTask?: boolean;
   assistantName?: string;
+  maxHistoryTurns?: number;
 }
 
 interface ContainerOutput {
-  status: 'success' | 'error';
+  status: 'success' | 'error' | 'tool_use' | 'interrupted';
   result: string | null;
   newSessionId?: string;
   error?: string;
+  toolName?: string;
+  toolSummary?: string;
 }
 
 interface SessionEntry {
@@ -111,6 +114,58 @@ function writeOutput(output: ContainerOutput): void {
   console.log(OUTPUT_START_MARKER);
   console.log(JSON.stringify(output));
   console.log(OUTPUT_END_MARKER);
+}
+
+function summarizeTool(name: string, input: Record<string, unknown>): string {
+  switch (name) {
+    case 'Bash': return String(input.command || '').slice(0, 80);
+    case 'Read': return String(input.file_path || '');
+    case 'Write': return String(input.file_path || '');
+    case 'Edit': return String(input.file_path || '');
+    case 'Glob': return String(input.pattern || '');
+    case 'Grep': return String(input.pattern || '');
+    case 'WebFetch': return String(input.url || '');
+    case 'WebSearch': return String(input.query || '');
+    default: return JSON.stringify(input).slice(0, 80);
+  }
+}
+
+function computeResumeAt(sessionId: string, maxTurns: number): string | undefined {
+  const sessionPath = `/home/node/.claude/projects/-workspace-group/${sessionId}.jsonl`;
+  try {
+    if (!fs.existsSync(sessionPath)) {
+      log(`History trim: session file not found at ${sessionPath}`);
+      return undefined;
+    }
+    const content = fs.readFileSync(sessionPath, 'utf8');
+    const lines = content.trim().split('\n').filter(l => l.trim());
+    // Use l.trim() to handle Windows CRLF line endings
+    const entries = lines.map(l => { try { return JSON.parse(l.trim()); } catch { return null; } }).filter(Boolean);
+    log(`History trim: ${lines.length} lines, ${entries.length} parsed entries`);
+
+    // Collect indices of user-type entries as turn boundaries
+    const userIndices = entries
+      .map((e, i) => ({ idx: i, isUser: e.type === 'user' || e.message?.role === 'user' }))
+      .filter(e => e.isUser)
+      .map(e => e.idx);
+
+    log(`History trim: ${userIndices.length} user entries, maxTurns=${maxTurns}`);
+    if (userIndices.length <= maxTurns) return undefined; // No trimming needed
+
+    // Target: the first user entry we want to keep (Nth from end)
+    const targetUserIdx = userIndices[userIndices.length - maxTurns];
+
+    // Find the last assistant entry before targetUserIdx
+    for (let i = targetUserIdx - 1; i >= 0; i--) {
+      const e = entries[i];
+      if ((e.type === 'assistant' || e.message?.role === 'assistant') && e.uuid) {
+        return e.uuid as string;
+      }
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function log(message: string): void {
@@ -435,6 +490,18 @@ async function runQuery(
 
     if (message.type === 'assistant' && 'uuid' in message) {
       lastAssistantUuid = (message as { uuid: string }).uuid;
+      // Emit tool_use events for each tool call block
+      const content = (message as { message?: { content?: unknown[] } }).message?.content;
+      if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block && typeof block === 'object' && (block as { type?: string }).type === 'tool_use') {
+            const b = block as { name?: string; input?: Record<string, unknown> };
+            const toolName = b.name || 'unknown';
+            const toolSummary = summarizeTool(toolName, b.input || {});
+            writeOutput({ status: 'tool_use', toolName, toolSummary, result: null });
+          }
+        }
+      }
     }
 
     if (message.type === 'system' && message.subtype === 'init') {
@@ -507,6 +574,13 @@ async function main(): Promise<void> {
 
   // Query loop: run query → wait for IPC message → run new query → repeat
   let resumeAt: string | undefined;
+  if (containerInput.maxHistoryTurns && sessionId) {
+    resumeAt = computeResumeAt(sessionId, containerInput.maxHistoryTurns);
+    if (resumeAt) {
+      log(`History trimmed to last ${containerInput.maxHistoryTurns} turns (resumeAt: ${resumeAt})`);
+      prompt += `\n\n[Note: Conversation history is limited to the last ${containerInput.maxHistoryTurns} turns. If you need more context, ask the user to increase MAX_HISTORY_TURNS or re-issue instructions.]`;
+    }
+  }
   try {
     while (true) {
       log(`Starting query (session: ${sessionId || 'new'}, resumeAt: ${resumeAt || 'latest'})...`);
@@ -524,6 +598,7 @@ async function main(): Promise<void> {
       // idle timer and cause a 30-min delay before the next _close).
       if (queryResult.closedDuringQuery) {
         log('Close sentinel consumed during query, exiting');
+        writeOutput({ status: 'interrupted', result: null, newSessionId: sessionId });
         break;
       }
 

@@ -153,6 +153,11 @@ export class GroupQueue {
     }
   }
 
+  /** Returns true if a container is currently active for this group. */
+  isActive(groupJid: string): boolean {
+    return this.getGroup(groupJid).active;
+  }
+
   /**
    * Send a follow-up message to the active container via IPC file.
    * Returns true if the message was written, false if no active container.
