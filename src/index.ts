@@ -300,11 +300,6 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       }
     }
 
-    if (result.status === 'interrupted') {
-      await channel.sendMessage(chatJid, '任务已中断。').catch(() => {
-        /* ignore */
-      });
-    }
 
     if (result.status === 'error') {
       hadError = true;
