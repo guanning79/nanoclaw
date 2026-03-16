@@ -1,3 +1,4 @@
+import path from 'path';
 import {
   Client,
   Events,
@@ -6,10 +7,11 @@ import {
   TextChannel,
 } from 'discord.js';
 
-import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
+import { ASSISTANT_NAME, TRIGGER_PATTERN, GROUPS_DIR } from '../config.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
 import { transcribeDiscordAudio } from '../discord-transcription.js';
+import { processImage } from '../image.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
   Channel,
@@ -99,6 +101,18 @@ export class DiscordChannel implements Channel {
           [...message.attachments.values()].map(async (att) => {
             const contentType = att.contentType || '';
             if (contentType.startsWith('image/')) {
+              const group = this.opts.registeredGroups()[chatJid];
+              if (group) {
+                try {
+                  const res = await fetch(att.url);
+                  const buf = Buffer.from(await res.arrayBuffer());
+                  const groupDir = path.join(GROUPS_DIR, group.folder);
+                  const processed = await processImage(buf, groupDir, att.description || '');
+                  if (processed) return processed.content;
+                } catch {
+                  // fall through to placeholder
+                }
+              }
               return `[Image: ${att.name || 'image'}]`;
             } else if (contentType.startsWith('video/')) {
               return `[Video: ${att.name || 'video'}]`;

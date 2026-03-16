@@ -90,6 +90,8 @@ Then run `/setup`. Claude Code handles everything: dependencies, authentication,
 - **Web access** - Search and fetch content from the Web
 - **Container isolation** - Agents are sandboxed in [Docker Sandboxes](https://nanoclaw.dev/blog/nanoclaw-docker-sandboxes) (micro VM isolation), Apple Container (macOS), or Docker (macOS/Linux)
 - **Agent Swarms** - Spin up teams of specialized agents that collaborate on complex tasks
+- **Voice transcription** - Discord voice messages are automatically transcribed so the agent can read and respond to them
+- **Image vision** - Send images in Discord and the agent can see and understand them using Claude's native vision
 - **Optional integrations** - Add Gmail (`/add-gmail`) and more via skills
 
 ## Usage
