@@ -227,7 +227,9 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     const silentSec = Math.round((Date.now() - lastActivityAt) / 1000);
     await channel
       .sendMessage(chatJid, `⏳ 仍在处理中… (已等待 ${silentSec}s)`)
-      .catch(() => {/* ignore */});
+      .catch(() => {
+        /* ignore */
+      });
   }, HEARTBEAT_MS);
 
   // Tool call batching: buffer tool calls for 5s then flush as one message
@@ -254,11 +256,18 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     lastActivityAt = Date.now();
     if (!firstOutputAt) {
       firstOutputAt = Date.now();
-      logger.info({ group: group.name, containerStartMs: firstOutputAt - agentStartedAt }, 'First container output');
+      logger.info(
+        { group: group.name, containerStartMs: firstOutputAt - agentStartedAt },
+        'First container output',
+      );
     }
 
     if (result.status === 'rate_limit') {
-      await channel.sendMessage(chatJid, result.result || '⏳ Rate limit — retrying…').catch(() => {/* ignore */});
+      await channel
+        .sendMessage(chatJid, result.result || '⏳ Rate limit — retrying…')
+        .catch(() => {
+          /* ignore */
+        });
     }
 
     if (result.status === 'tool_use' && result.toolName) {
@@ -306,7 +315,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   await flushToolCalls();
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
-  logger.info({ group: group.name, totalAgentMs: Date.now() - agentStartedAt }, 'Agent processing done');
+  logger.info(
+    { group: group.name, totalAgentMs: Date.now() - agentStartedAt },
+    'Agent processing done',
+  );
 
   if (output === 'error' || hadError) {
     // If we already sent output to the user, don't roll back the cursor —

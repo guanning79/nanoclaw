@@ -78,7 +78,9 @@ function findCudaDllPaths(python: string): string {
     const sitePackages = execSync(
       `"${python}" -c "import site; print('\\n'.join(site.getsitepackages() + [site.getusersitepackages()]))"`,
       { encoding: 'utf8', timeout: 5000 },
-    ).trim().split('\n');
+    )
+      .trim()
+      .split('\n');
     const bins: string[] = [];
     for (const sp of sitePackages) {
       const nvidiaDir = sp.trim().replace(/\\/g, '/') + '/nvidia';
@@ -101,12 +103,15 @@ function spawnServer(): void {
 
   const cudaDllPaths = findCudaDllPaths(python);
   if (cudaDllPaths) {
-    logger.debug({ cudaDllPaths }, 'Adding CUDA DLL paths to whisper server PATH');
+    logger.debug(
+      { cudaDllPaths },
+      'Adding CUDA DLL paths to whisper server PATH',
+    );
   }
 
   const existingPath = process.env.PATH || '';
   const env: Record<string, string> = {
-    ...process.env as Record<string, string>,
+    ...(process.env as Record<string, string>),
     WHISPER_MODEL: model,
     WHISPER_PORT: String(WHISPER_PORT),
     WHISPER_IDLE_TIMEOUT: String(WHISPER_IDLE_TIMEOUT_MIN),
@@ -199,7 +204,10 @@ async function transcribeFallback(
     encoding: 'utf8',
   });
   const transcript = stdout.trim();
-  logger.info({ filename, chars: transcript.length }, 'Discord voice message transcribed (fallback)');
+  logger.info(
+    { filename, chars: transcript.length },
+    'Discord voice message transcribed (fallback)',
+  );
   return transcript || null;
 }
 
@@ -229,11 +237,17 @@ export async function transcribeDiscordAudio(
         signal: AbortSignal.timeout(120_000),
       });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data = (await resp.json()) as { transcript?: string; error?: string };
+      const data = (await resp.json()) as {
+        transcript?: string;
+        error?: string;
+      };
       if (data.error) throw new Error(data.error);
       transcript = data.transcript?.trim() || null;
     } catch (serverErr) {
-      logger.warn({ err: serverErr }, 'Whisper server failed, falling back to subprocess');
+      logger.warn(
+        { err: serverErr },
+        'Whisper server failed, falling back to subprocess',
+      );
       transcript = await transcribeFallback(tmpPath, filename);
     }
 
@@ -241,7 +255,13 @@ export async function transcribeDiscordAudio(
     if (!transcript) return null;
 
     logger.info(
-      { filename, chars: transcript.length, downloadMs, whisperMs, totalMs: Date.now() - t0 },
+      {
+        filename,
+        chars: transcript.length,
+        downloadMs,
+        whisperMs,
+        totalMs: Date.now() - t0,
+      },
       'Discord voice message transcribed',
     );
     return transcript;
