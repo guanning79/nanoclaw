@@ -103,10 +103,13 @@ export class DiscordChannel implements Channel {
             } else if (contentType.startsWith('video/')) {
               return `[Video: ${att.name || 'video'}]`;
             } else if (contentType.startsWith('audio/')) {
+              const audioReceivedAt = Date.now();
+              logger.info({ filename: att.name, size: att.size }, 'Voice message received, starting transcription');
               const transcript = await transcribeDiscordAudio(
                 att.url,
                 att.name || 'audio',
               );
+              logger.info({ totalPipelineMs: Date.now() - audioReceivedAt }, 'Voice transcription pipeline done');
               if (transcript) {
                 return `[Voice: ${transcript}]`;
               }

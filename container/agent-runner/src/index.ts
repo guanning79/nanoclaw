@@ -139,26 +139,56 @@ function computeResumeAt(sessionId: string, maxTurns: number): string | undefine
     }
     const content = fs.readFileSync(sessionPath, 'utf8');
     const lines = content.trim().split('\n').filter(l => l.trim());
-    // Use l.trim() to handle Windows CRLF line endings
     const entries = lines.map(l => { try { return JSON.parse(l.trim()); } catch { return null; } }).filter(Boolean);
     log(`History trim: ${lines.length} lines, ${entries.length} parsed entries`);
 
-    // Collect indices of user-type entries as turn boundaries
-    const userIndices = entries
-      .map((e, i) => ({ idx: i, isUser: e.type === 'user' || e.message?.role === 'user' }))
-      .filter(e => e.isUser)
-      .map(e => e.idx);
+    // Build a set of UUIDs that are on the CURRENT active path.
+    // The active path is the leaf-to-root chain from the latest result entry.
+    // Only UUIDs on this path are valid for resumeSessionAt.
+    const byUuid = new Map<string, { uuid: string; parentUuid: string | null; type: string }>();
+    for (const e of entries) {
+      if (e.uuid) byUuid.set(e.uuid, e);
+    }
+    // Find the latest assistant entry as the leaf of the active path
+    // (result entries don't have UUIDs; the conversation tree ends with assistant entries)
+    let leafUuid: string | undefined;
+    for (let i = entries.length - 1; i >= 0; i--) {
+      if (entries[i].type === 'assistant' && entries[i].uuid) { leafUuid = entries[i].uuid; break; }
+    }
+    const activePathUuids = new Set<string>();
+    if (leafUuid) {
+      let cur: string | null = leafUuid;
+      while (cur) {
+        activePathUuids.add(cur);
+        cur = byUuid.get(cur)?.parentUuid ?? null;
+      }
+    }
+    log(`History trim: active path has ${activePathUuids.size} nodes`);
 
-    log(`History trim: ${userIndices.length} user entries, maxTurns=${maxTurns}`);
-    if (userIndices.length <= maxTurns) return undefined; // No trimming needed
+    // Collect user entries on the active path, in order
+    const activeUserEntries = entries.filter(e =>
+      e.type === 'user' && e.uuid && activePathUuids.has(e.uuid)
+    );
 
-    // Target: the first user entry we want to keep (Nth from end)
-    const targetUserIdx = userIndices[userIndices.length - maxTurns];
+    log(`History trim: ${activeUserEntries.length} active user entries, maxTurns=${maxTurns}`);
+    if (activeUserEntries.length <= maxTurns) return undefined; // No trimming needed
 
-    // Find the last assistant entry before targetUserIdx
-    for (let i = targetUserIdx - 1; i >= 0; i--) {
+    // The first user entry we want to keep is Nth from end on the active path
+    const targetUser = activeUserEntries[activeUserEntries.length - maxTurns];
+
+    // Find the assistant entry that is the parent of this user entry (on active path)
+    const parentUuid = targetUser.parentUuid as string | null;
+    if (parentUuid && activePathUuids.has(parentUuid)) {
+      log(`History trim: resumeAt=${parentUuid}`);
+      return parentUuid;
+    }
+
+    // Fallback: walk backwards from targetUser's index for an assistant on active path
+    const targetIdx = entries.indexOf(targetUser);
+    for (let i = targetIdx - 1; i >= 0; i--) {
       const e = entries[i];
-      if ((e.type === 'assistant' || e.message?.role === 'assistant') && e.uuid) {
+      if (e.type === 'assistant' && e.uuid && activePathUuids.has(e.uuid)) {
+        log(`History trim: resumeAt=${e.uuid} (fallback)`);
         return e.uuid as string;
       }
     }
@@ -500,6 +530,26 @@ async function runQuery(
             const toolSummary = summarizeTool(toolName, b.input || {});
             writeOutput({ status: 'tool_use', toolName, toolSummary, result: null });
           }
+        }
+      }
+    }
+
+    if (message.type === 'rate_limit_event') {
+      const info = (message as { rate_limit_info?: {
+        status: string; resetsAt?: number; rateLimitType?: string; utilization?: number;
+      } }).rate_limit_info;
+      if (info) {
+        const utilPct = info.utilization != null ? `${Math.round(info.utilization * 100)}%` : null;
+        const resetsIn = info.resetsAt ? Math.ceil((info.resetsAt * 1000 - Date.now()) / 60000) : null;
+        const parts = [
+          info.status === 'rejected' ? '⏳ Rate limit reached' : '⚠️ Rate limit warning',
+          info.rateLimitType ? `[${info.rateLimitType}]` : '',
+          utilPct ? `usage: ${utilPct}` : '',
+          resetsIn != null ? `resets in ~${resetsIn} min` : '',
+        ].filter(Boolean).join(' ');
+        log(`Rate limit: ${parts}`);
+        if (info.status !== 'allowed') {
+          writeOutput({ status: 'rate_limit' as 'success', result: parts });
         }
       }
     }

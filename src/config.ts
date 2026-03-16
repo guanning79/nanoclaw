@@ -51,6 +51,11 @@ export const CREDENTIAL_PROXY_PORT = parseInt(
   process.env.CREDENTIAL_PROXY_PORT || '3001',
   10,
 );
+export const WHISPER_PORT = parseInt(process.env.WHISPER_PORT || '3002', 10);
+export const WHISPER_IDLE_TIMEOUT_MIN = parseInt(
+  process.env.WHISPER_IDLE_TIMEOUT || '15',
+  10,
+);
 export const IPC_POLL_INTERVAL = 1000;
 export const IDLE_TIMEOUT = parseInt(process.env.IDLE_TIMEOUT || '1800000', 10); // 30min default — how long to keep container alive after last result
 export const MAX_HISTORY_TURNS = parseInt(

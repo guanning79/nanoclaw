@@ -215,6 +215,20 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   await channel.setTyping?.(chatJid, true);
   let hadError = false;
   let outputSentToUser = false;
+  const agentStartedAt = Date.now();
+  let firstOutputAt: number | null = null;
+
+  // Heartbeat: notify user every 60s if agent is silent
+  const HEARTBEAT_MS = 60_000;
+  let lastActivityAt = Date.now();
+  let replyReceived = false;
+  const heartbeat = setInterval(async () => {
+    if (replyReceived) return;
+    const silentSec = Math.round((Date.now() - lastActivityAt) / 1000);
+    await channel
+      .sendMessage(chatJid, `⏳ 仍在处理中… (已等待 ${silentSec}s)`)
+      .catch(() => {/* ignore */});
+  }, HEARTBEAT_MS);
 
   // Tool call batching: buffer tool calls for 5s then flush as one message
   const toolCallBuffer: string[] = [];
@@ -235,8 +249,17 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   };
 
   const output = await runAgent(group, prompt, chatJid, async (result) => {
-    // Reset idle timer on any container output (not just final text results)
+    // Reset idle timer and heartbeat on any container output
     resetIdleTimer();
+    lastActivityAt = Date.now();
+    if (!firstOutputAt) {
+      firstOutputAt = Date.now();
+      logger.info({ group: group.name, containerStartMs: firstOutputAt - agentStartedAt }, 'First container output');
+    }
+
+    if (result.status === 'rate_limit') {
+      await channel.sendMessage(chatJid, result.result || '⏳ Rate limit — retrying…').catch(() => {/* ignore */});
+    }
 
     if (result.status === 'tool_use' && result.toolName) {
       const entry = result.toolSummary
@@ -252,6 +275,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }
 
     if (result.result) {
+      replyReceived = true;
       // Flush any buffered tool calls before the final reply
       await flushToolCalls();
       const raw =
@@ -278,9 +302,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }
   });
 
+  clearInterval(heartbeat);
   await flushToolCalls();
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
+  logger.info({ group: group.name, totalAgentMs: Date.now() - agentStartedAt }, 'Agent processing done');
 
   if (output === 'error' || hadError) {
     // If we already sent output to the user, don't roll back the cursor —

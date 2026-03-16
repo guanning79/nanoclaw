@@ -45,7 +45,7 @@ export interface ContainerInput {
 }
 
 export interface ContainerOutput {
-  status: 'success' | 'error' | 'tool_use' | 'interrupted';
+  status: 'success' | 'error' | 'tool_use' | 'interrupted' | 'rate_limit';
   result: string | null;
   newSessionId?: string;
   error?: string;
