@@ -74,6 +74,64 @@ tasklist | grep node
 
 **Important on Windows:** Use absolute paths in the restart command since shell working directory resets between commands. Append to the existing log file (`>>`) rather than overwriting (`>`).
 
+## Step 2.5: Clean up corrupted sessions
+
+Run this **after** killing the process but **before** starting it. It detects and removes sessions that would cause an infinite retry loop on startup.
+
+A session is considered corrupted if:
+- Its directory no longer exists on disk (session was force-killed mid-write), OR
+- The recent log contains `No message found with message.uuid` errors referencing it
+
+```bash
+node -e "
+const Database = require('better-sqlite3');
+const fs = require('fs');
+const db = new Database('d:/Dev/Tools/nanoclaw/store/messages.db');
+const sessions = db.prepare('SELECT * FROM sessions').all();
+let cleared = 0;
+for (const { group_folder, session_id } of sessions) {
+  const sessionDir = 'd:/Dev/Tools/nanoclaw/data/sessions/' + group_folder + '/.claude/projects/-workspace-group/' + session_id;
+  if (!fs.existsSync(sessionDir)) {
+    db.prepare('DELETE FROM sessions WHERE group_folder = ?').run(group_folder);
+    console.log('Cleared missing session for ' + group_folder + ': ' + session_id);
+    cleared++;
+  }
+}
+if (cleared === 0) console.log('All sessions valid');
+db.close();
+"
+```
+
+Also check the recent log for UUID errors and clear any affected sessions:
+
+```bash
+# Extract group names from "No message found" errors in recent log
+grep -oP "(?<=Container agent error).*" d:/Dev/Tools/nanoclaw/logs/nanoclaw.log 2>/dev/null | tail -20 || true
+grep "No message found with message.uuid" d:/Dev/Tools/nanoclaw/logs/nanoclaw.log 2>/dev/null | tail -5 || true
+```
+
+If the log shows `No message found with message.uuid of: <uuid>` errors for a group, clear that session:
+
+```bash
+node -e "
+const Database = require('better-sqlite3');
+const fs = require('fs');
+const db = new Database('d:/Dev/Tools/nanoclaw/store/messages.db');
+// Replace GROUP_FOLDER with the actual group folder name (e.g. discord_main)
+const GROUP = 'GROUP_FOLDER';
+const row = db.prepare('SELECT session_id FROM sessions WHERE group_folder = ?').get(GROUP);
+if (row) {
+  const sessionDir = 'd:/Dev/Tools/nanoclaw/data/sessions/' + GROUP + '/.claude/projects/-workspace-group/' + row.session_id;
+  db.prepare('DELETE FROM sessions WHERE group_folder = ?').run(GROUP);
+  try { fs.rmSync(sessionDir, { recursive: true, force: true }); } catch {}
+  console.log('Cleared session for ' + GROUP + ': ' + row.session_id);
+} else {
+  console.log('No session found for ' + GROUP);
+}
+db.close();
+"
+```
+
 ## Step 3: Verify
 
 Wait 3–5 seconds, then check logs:

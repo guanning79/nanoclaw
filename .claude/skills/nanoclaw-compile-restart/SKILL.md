@@ -55,6 +55,55 @@ powershell.exe -Command "Stop-Process -Id <PID> -Force"
 
 If the PID is not found or the process is already dead, continue.
 
+## Step 3.5: Clean up corrupted sessions
+
+Run this after killing the old process. Clears sessions that would cause an infinite retry loop (e.g. after a force-kill mid-operation).
+
+```bash
+node -e "
+const Database = require('better-sqlite3');
+const fs = require('fs');
+const db = new Database('d:/Dev/Tools/nanoclaw/store/messages.db');
+const sessions = db.prepare('SELECT * FROM sessions').all();
+let cleared = 0;
+for (const { group_folder, session_id } of sessions) {
+  const sessionDir = 'd:/Dev/Tools/nanoclaw/data/sessions/' + group_folder + '/.claude/projects/-workspace-group/' + session_id;
+  if (!fs.existsSync(sessionDir)) {
+    db.prepare('DELETE FROM sessions WHERE group_folder = ?').run(group_folder);
+    console.log('Cleared missing session for ' + group_folder + ': ' + session_id);
+    cleared++;
+  }
+}
+if (cleared === 0) console.log('All sessions valid');
+db.close();
+"
+```
+
+Also scan the recent log for `No message found with message.uuid` errors — these indicate a session whose history is corrupted. If found, clear the affected session:
+
+```bash
+grep "No message found with message.uuid" d:/Dev/Tools/nanoclaw/logs/nanoclaw.log 2>/dev/null | tail -5 || true
+```
+
+If errors are found, identify the affected group from the surrounding log lines (`Processing messages` → `group: "..."`) and run:
+
+```bash
+node -e "
+const Database = require('better-sqlite3');
+const fs = require('fs');
+const db = new Database('d:/Dev/Tools/nanoclaw/store/messages.db');
+const GROUP = 'GROUP_FOLDER'; // replace with actual group folder
+const row = db.prepare('SELECT session_id FROM sessions WHERE group_folder = ?').get(GROUP);
+if (row) {
+  const sessionDir = 'd:/Dev/Tools/nanoclaw/data/sessions/' + GROUP + '/.claude/projects/-workspace-group/' + row.session_id;
+  db.prepare('DELETE FROM sessions WHERE group_folder = ?').run(GROUP);
+  try { fs.rmSync(sessionDir, { recursive: true, force: true }); } catch {}
+  console.log('Cleared session for ' + GROUP + ': ' + row.session_id);
+}
+db.close();
+"
+```
+
 ## Step 4: Start NanoClaw in background
 
 ```bash
