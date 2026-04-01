@@ -1,4 +1,4 @@
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -643,6 +643,25 @@ async function main(): Promise<void> {
     }
   }
 
+  async function handleRestart(chatJid: string): Promise<void> {
+    const group = registeredGroups[chatJid];
+    if (!group?.isMain) return;
+
+    const channel = findChannel(channels, chatJid);
+    if (!channel) return;
+
+    await channel.sendMessage(chatJid, '重启中，稍等片刻…');
+
+    const restartScript = path.join(process.cwd(), 'restart.sh');
+    const child = spawn('bash', [restartScript], {
+      detached: true,
+      stdio: 'ignore',
+    });
+    child.unref();
+
+    shutdown('restart');
+  }
+
   // Channel callbacks (shared by all channels)
   const channelOpts = {
     onMessage: (chatJid: string, msg: NewMessage) => {
@@ -651,6 +670,12 @@ async function main(): Promise<void> {
       if (trimmed === '/remote-control' || trimmed === '/remote-control-end') {
         handleRemoteControl(trimmed, chatJid, msg).catch((err) =>
           logger.error({ err, chatJid }, 'Remote control command error'),
+        );
+        return;
+      }
+      if (trimmed === '/restart') {
+        handleRestart(chatJid).catch((err) =>
+          logger.error({ err, chatJid }, 'Restart command error'),
         );
         return;
       }
