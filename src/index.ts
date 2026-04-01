@@ -752,6 +752,11 @@ async function main(): Promise<void> {
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
       return channel.sendMessage(jid, text);
     },
+    sendFile: async (jid, filePaths, text) => {
+      const channel = findChannel(channels, jid);
+      if (channel?.sendFile) await channel.sendFile(jid, filePaths, text);
+      else logger.warn({ jid }, 'Channel does not support sendFile');
+    },
     registeredGroups: () => registeredGroups,
     registerGroup,
     syncGroups: async (force: boolean) => {
@@ -789,9 +794,7 @@ async function main(): Promise<void> {
     });
   });
   // Send greeting to main group on startup
-  const mainEntry = Object.entries(registeredGroups).find(
-    ([, g]) => g.isMain,
-  );
+  const mainEntry = Object.entries(registeredGroups).find(([, g]) => g.isMain);
   if (mainEntry) {
     const [mainJid] = mainEntry;
     const mainChannel = findChannel(channels, mainJid);

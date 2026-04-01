@@ -43,15 +43,21 @@ server.tool(
   'send_message',
   "Send a message to the user or group immediately while you're still running. Use this for progress updates or to send multiple messages. You can call this multiple times.",
   {
-    text: z.string().describe('The message text to send'),
+    text: z.string().optional().describe('The message text to send'),
     sender: z.string().optional().describe('Your role/identity name (e.g. "Researcher"). When set, messages appear from a dedicated bot in Telegram.'),
+    files: z.array(z.string()).optional().describe('Container-absolute paths of files to attach as Discord attachments (e.g. "/workspace/group/report.pdf", "/workspace/extra/Dev/output.csv"). At least one of text or files must be provided.'),
   },
   async (args) => {
-    const data: Record<string, string | undefined> = {
+    if (!args.text && (!args.files || args.files.length === 0)) {
+      return { content: [{ type: 'text' as const, text: 'Error: at least one of text or files must be provided.' }], isError: true };
+    }
+
+    const data: Record<string, unknown> = {
       type: 'message',
       chatJid,
-      text: args.text,
+      text: args.text || undefined,
       sender: args.sender || undefined,
+      files: args.files || undefined,
       groupFolder,
       timestamp: new Date().toISOString(),
     };

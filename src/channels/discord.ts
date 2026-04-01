@@ -257,6 +257,31 @@ export class DiscordChannel implements Channel {
     }
   }
 
+  async sendFile(jid: string, filePaths: string[], text?: string): Promise<void> {
+    if (!this.client) {
+      logger.warn('Discord client not initialized');
+      return;
+    }
+
+    try {
+      const channelId = jid.replace(/^dc:/, '');
+      const channel = await this.client.channels.fetch(channelId);
+
+      if (!channel || !('send' in channel)) {
+        logger.warn({ jid }, 'Discord channel not found or not text-based');
+        return;
+      }
+
+      await (channel as TextChannel).send({
+        content: text || undefined,
+        files: filePaths,
+      });
+      logger.info({ jid, count: filePaths.length }, 'Discord files sent');
+    } catch (err) {
+      logger.error({ jid, err }, 'Failed to send Discord files');
+    }
+  }
+
   isConnected(): boolean {
     return this.client !== null && this.client.isReady();
   }

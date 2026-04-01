@@ -6,12 +6,13 @@ import { CronExpressionParser } from 'cron-parser';
 import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
 import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
-import { isValidGroupFolder } from './group-folder.js';
+import { isValidGroupFolder, resolveGroupFolderPath } from './group-folder.js';
 import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
   sendMessage: (jid: string, text: string) => Promise<void>;
+  sendFile?: (jid: string, filePaths: string[], text?: string) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   syncGroups: (force: boolean) => Promise<void>;
@@ -26,6 +27,39 @@ export interface IpcDeps {
 }
 
 let ipcWatcherRunning = false;
+
+/** @internal — exported for tests */
+export function resolveContainerPaths(
+  containerPaths: string[],
+  group: RegisteredGroup,
+  groupDir: string,
+): string[] {
+  const groupDirNorm = groupDir.replace(/\\/g, '/');
+  const mountMap: Array<{ containerPrefix: string; hostPrefix: string }> = [
+    { containerPrefix: '/workspace/group/', hostPrefix: groupDirNorm + '/' },
+  ];
+  for (const m of group.containerConfig?.additionalMounts ?? []) {
+    const cp = m.containerPath || path.basename(m.hostPath);
+    mountMap.push({
+      containerPrefix: `/workspace/extra/${cp}/`,
+      hostPrefix: m.hostPath.replace(/\\/g, '/') + '/',
+    });
+  }
+  mountMap.sort((a, b) => b.containerPrefix.length - a.containerPrefix.length);
+
+  return containerPaths.flatMap((p) => {
+    const normalized = p.startsWith('/') ? p : `/workspace/group/${p}`;
+    for (const { containerPrefix, hostPrefix } of mountMap) {
+      if (normalized.startsWith(containerPrefix)) {
+        const relative = normalized.slice(containerPrefix.length);
+        const hostPath = path.posix.normalize(hostPrefix + relative);
+        if (hostPath.startsWith(hostPrefix)) return [hostPath];
+      }
+    }
+    logger.warn({ path: p }, 'File path not within any known mount — skipped');
+    return [];
+  });
+}
 
 export function startIpcWatcher(deps: IpcDeps): void {
   if (ipcWatcherRunning) {
@@ -74,14 +108,30 @@ export function startIpcWatcher(deps: IpcDeps): void {
             const filePath = path.join(messagesDir, file);
             try {
               const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-              if (data.type === 'message' && data.chatJid && data.text) {
+              if (
+                data.type === 'message' &&
+                data.chatJid &&
+                (data.text || data.files?.length)
+              ) {
                 // Authorization: verify this group can send to this chatJid
                 const targetGroup = registeredGroups[data.chatJid];
                 if (
                   isMain ||
                   (targetGroup && targetGroup.folder === sourceGroup)
                 ) {
-                  await deps.sendMessage(data.chatJid, data.text);
+                  if (data.files?.length) {
+                    const group =
+                      deps.registeredGroups()[data.chatJid] ?? targetGroup;
+                    const groupDir = resolveGroupFolderPath(sourceGroup);
+                    const hostPaths = resolveContainerPaths(
+                      data.files,
+                      group,
+                      groupDir,
+                    );
+                    await deps.sendFile?.(data.chatJid, hostPaths, data.text);
+                  } else {
+                    await deps.sendMessage(data.chatJid, data.text);
+                  }
                   logger.info(
                     { chatJid: data.chatJid, sourceGroup },
                     'IPC message sent',
