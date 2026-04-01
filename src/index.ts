@@ -788,6 +788,18 @@ async function main(): Promise<void> {
         logger.warn({ containerName, err }, 'Force stop container failed');
     });
   });
+  // Send greeting to main group on startup
+  const mainEntry = Object.entries(registeredGroups).find(
+    ([, g]) => g.isMain,
+  );
+  if (mainEntry) {
+    const [mainJid] = mainEntry;
+    const mainChannel = findChannel(channels, mainJid);
+    mainChannel
+      ?.sendMessage(mainJid, '我上线了。')
+      .catch((err) => logger.warn({ err }, 'Failed to send startup greeting'));
+  }
+
   recoverPendingMessages();
   startMessageLoop().catch((err) => {
     logger.fatal({ err }, 'Message loop crashed unexpectedly');
