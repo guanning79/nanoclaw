@@ -1,3 +1,4 @@
+import { exec } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
@@ -26,6 +27,7 @@ import {
   cleanupOrphans,
   ensureContainerRuntimeRunning,
   PROXY_BIND_HOST,
+  stopContainer,
 } from './container-runtime.js';
 import {
   getAllChats,
@@ -252,60 +254,72 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     });
   };
 
-  const output = await runAgent(group, prompt, chatJid, imageAttachments, async (result) => {
-    // Reset idle timer and heartbeat on any container output
-    resetIdleTimer();
-    lastActivityAt = Date.now();
-    if (!firstOutputAt) {
-      firstOutputAt = Date.now();
-      logger.info(
-        { group: group.name, containerStartMs: firstOutputAt - agentStartedAt },
-        'First container output',
-      );
-    }
-
-    if (result.status === 'rate_limit') {
-      await channel
-        .sendMessage(chatJid, result.result || '⏳ Rate limit — retrying…')
-        .catch(() => {
-          /* ignore */
-        });
-    }
-
-    if (result.status === 'tool_use' && result.toolName) {
-      const entry = result.toolSummary
-        ? `${result.toolName}: ${result.toolSummary}`
-        : result.toolName;
-      toolCallBuffer.push(entry);
-      if (toolFlushTimer) clearTimeout(toolFlushTimer);
-      toolFlushTimer = setTimeout(flushToolCalls, 5000);
-    }
-
-    if (result.status === 'success') {
-      queue.notifyIdle(chatJid);
-    }
-
-    if (result.result) {
-      replyReceived = true;
-      // Flush any buffered tool calls before the final reply
-      await flushToolCalls();
-      const raw =
-        typeof result.result === 'string'
-          ? result.result
-          : JSON.stringify(result.result);
-      // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
-      const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-      logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
-      if (text) {
-        await channel.sendMessage(chatJid, text);
-        outputSentToUser = true;
+  const output = await runAgent(
+    group,
+    prompt,
+    chatJid,
+    imageAttachments,
+    async (result) => {
+      // Reset idle timer and heartbeat on any container output
+      resetIdleTimer();
+      lastActivityAt = Date.now();
+      if (!firstOutputAt) {
+        firstOutputAt = Date.now();
+        logger.info(
+          {
+            group: group.name,
+            containerStartMs: firstOutputAt - agentStartedAt,
+          },
+          'First container output',
+        );
       }
-    }
 
-    if (result.status === 'error') {
-      hadError = true;
-    }
-  });
+      if (result.status === 'rate_limit') {
+        await channel
+          .sendMessage(chatJid, result.result || '⏳ Rate limit — retrying…')
+          .catch(() => {
+            /* ignore */
+          });
+      }
+
+      if (result.status === 'tool_use' && result.toolName) {
+        const entry = result.toolSummary
+          ? `${result.toolName}: ${result.toolSummary}`
+          : result.toolName;
+        toolCallBuffer.push(entry);
+        if (toolFlushTimer) clearTimeout(toolFlushTimer);
+        toolFlushTimer = setTimeout(flushToolCalls, 5000);
+      }
+
+      if (result.status === 'success') {
+        queue.notifyIdle(chatJid);
+      }
+
+      if (result.result) {
+        replyReceived = true;
+        // Flush any buffered tool calls before the final reply
+        await flushToolCalls();
+        const raw =
+          typeof result.result === 'string'
+            ? result.result
+            : JSON.stringify(result.result);
+        // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
+        const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+        logger.info(
+          { group: group.name },
+          `Agent output: ${raw.slice(0, 200)}`,
+        );
+        if (text) {
+          await channel.sendMessage(chatJid, text);
+          outputSentToUser = true;
+        }
+      }
+
+      if (result.status === 'error') {
+        hadError = true;
+      }
+    },
+  );
 
   clearInterval(heartbeat);
   await flushToolCalls();
@@ -504,7 +518,7 @@ async function startMessageLoop(): Promise<void> {
             .join(' ')
             .trim();
           if (INTERRUPT_PATTERN.test(combinedText) && queue.isActive(chatJid)) {
-            queue.closeStdin(chatJid);
+            queue.forceStop(chatJid);
             channel
               .sendMessage(chatJid, '任务已打断。')
               .catch((err) =>
@@ -725,8 +739,30 @@ async function main(): Promise<void> {
     getAvailableGroups,
     writeGroupsSnapshot: (gf, im, ag, rj) =>
       writeGroupsSnapshot(gf, im, ag, rj),
+    writeTasksSnapshot: (groupFolder, isMain) => {
+      const tasks = getAllTasks();
+      writeTasksSnapshot(
+        groupFolder,
+        isMain,
+        tasks.map((t) => ({
+          id: t.id,
+          groupFolder: t.group_folder,
+          prompt: t.prompt,
+          schedule_type: t.schedule_type,
+          schedule_value: t.schedule_value,
+          status: t.status,
+          next_run: t.next_run,
+        })),
+      );
+    },
   });
   queue.setProcessMessagesFn(processGroupMessages);
+  queue.setContainerStopper((containerName) => {
+    exec(stopContainer(containerName), { timeout: 15000 }, (err) => {
+      if (err)
+        logger.warn({ containerName, err }, 'Force stop container failed');
+    });
+  });
   recoverPendingMessages();
   startMessageLoop().catch((err) => {
     logger.fatal({ err }, 'Message loop crashed unexpectedly');

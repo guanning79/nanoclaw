@@ -33,6 +33,7 @@ export class GroupQueue {
   private waitingGroups: string[] = [];
   private processMessagesFn: ((groupJid: string) => Promise<boolean>) | null =
     null;
+  private containerStopperFn: ((containerName: string) => void) | null = null;
   private shuttingDown = false;
 
   private getGroup(groupJid: string): GroupState {
@@ -57,6 +58,29 @@ export class GroupQueue {
 
   setProcessMessagesFn(fn: (groupJid: string) => Promise<boolean>): void {
     this.processMessagesFn = fn;
+  }
+
+  setContainerStopper(fn: (containerName: string) => void): void {
+    this.containerStopperFn = fn;
+  }
+
+  /**
+   * Forcefully stop the active container for a group.
+   * Writes the _close sentinel for clean handling, then immediately
+   * executes docker stop to kill the container without waiting for
+   * the current Claude API call to finish.
+   */
+  forceStop(groupJid: string): void {
+    const state = this.getGroup(groupJid);
+    if (!state.active) return;
+
+    this.closeStdin(groupJid);
+
+    if (state.containerName && this.containerStopperFn) {
+      this.containerStopperFn(state.containerName);
+    } else if (state.process) {
+      state.process.kill('SIGTERM');
+    }
   }
 
   enqueueMessageCheck(groupJid: string): void {

@@ -4,7 +4,7 @@ import path from 'path';
 import crypto from 'crypto';
 
 export interface ProcessedImage {
-  content: string;      // "[Image: attachments/img-123-abc.jpg]"
+  content: string; // "[Image: attachments/img-123-abc.jpg]"
   relativePath: string; // "attachments/img-123-abc.jpg"
 }
 

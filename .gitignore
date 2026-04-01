@@ -40,3 +40,4 @@ groups/global/*
 .claude/settings.json
 
 agents-sdk-docs
+issue-report

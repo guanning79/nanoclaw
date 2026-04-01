@@ -107,7 +107,11 @@ export class DiscordChannel implements Channel {
                   const res = await fetch(att.url);
                   const buf = Buffer.from(await res.arrayBuffer());
                   const groupDir = path.join(GROUPS_DIR, group.folder);
-                  const processed = await processImage(buf, groupDir, att.description || '');
+                  const processed = await processImage(
+                    buf,
+                    groupDir,
+                    att.description || '',
+                  );
                   if (processed) return processed.content;
                 } catch {
                   // fall through to placeholder
