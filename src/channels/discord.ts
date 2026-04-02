@@ -257,7 +257,11 @@ export class DiscordChannel implements Channel {
     }
   }
 
-  async sendFile(jid: string, filePaths: string[], text?: string): Promise<void> {
+  async sendFile(
+    jid: string,
+    filePaths: string[],
+    text?: string,
+  ): Promise<void> {
     if (!this.client) {
       logger.warn('Discord client not initialized');
       return;

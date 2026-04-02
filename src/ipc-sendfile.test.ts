@@ -12,7 +12,11 @@ const GROUP: RegisteredGroup = {
   containerConfig: {
     additionalMounts: [
       { hostPath: 'D:/Dev', containerPath: 'Dev', readonly: false },
-      { hostPath: 'C:/Users/guann/Documents', containerPath: 'Documents', readonly: true },
+      {
+        hostPath: 'C:/Users/guann/Documents',
+        containerPath: 'Documents',
+        readonly: true,
+      },
     ],
   },
 };
